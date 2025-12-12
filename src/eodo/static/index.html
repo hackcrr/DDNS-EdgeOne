@@ -107,6 +107,16 @@
             </select>
           </div>
           
+          <!-- IPv6状态配置 -->
+          <div class="mt-3">
+            <label class="form-label">IPv6状态</label>
+            <select class="form-select" name="ipv6Status" id="ipv6Status">
+              <option value="follow" selected>遵循站点IPv6配置</option>
+              <option value="on">开启</option>
+              <option value="off">关闭</option>
+            </select>
+          </div>
+          
           <!-- 回源端口配置 -->
           <div id="httpPortDiv" class="mt-2">
             <label class="form-label">HTTP回源端口</label>
@@ -214,7 +224,7 @@
         <div class="row">
           <div class="col-md-4 mb-2">
             <label class="form-label">当前网口IPv6地址</label>
-            <select class="form-select" name="CurrentIPv6List" id="CurrentIPv6List" disabled></select>
+            <select class="form-select" name="CurrentIPv6List" id="CurrentIPv6List" multiple></select>
           </div>
           <div class="col-md-3 mb-2">
             <label class="form-label">选择网络接口</label>
@@ -415,7 +425,9 @@ function fetchConfig(){
         fetch('/api/iface').then(r=>r.json()).then(ifaces=>{
             let sel = document.getElementById('SelectIface');
             sel.innerHTML = "";
-            ifaces.forEach(i=>{
+            // 确保ifaces是数组类型
+            const ifacesArray = Array.isArray(ifaces) ? ifaces : [];
+            ifacesArray.forEach(i=>{
                 let o = document.createElement('option');
                 o.value = o.textContent = i;
                 if(res.SelectIface==i)o.selected=true;
@@ -456,7 +468,7 @@ function fetchIPv6Addresses(iface, ipv6Regex) {
     fetch(`/api/ipv6-addresses?iface=${encodeURIComponent(iface)}`)
         .then(r=>r.json())
         .then(addresses=>{
-            // 更新当前网口IPv6地址选择框
+            // 更新当前网口IPv6地址选择框（多选）
             const ipv6ListSelect = document.getElementById('CurrentIPv6List');
             ipv6ListSelect.innerHTML = "";
             
@@ -467,6 +479,9 @@ function fetchIPv6Addresses(iface, ipv6Regex) {
                     ipv6ListSelect.appendChild(option);
                 });
                 
+                // 设置多选下拉框的大小，确保能看到多个地址
+                ipv6ListSelect.size = Math.min(addresses.length, 5);
+                
                 // 根据IPv6Regex选择最终地址
                 updateFinalIPv6Address(addresses, ipv6Regex);
             } else {
@@ -474,6 +489,7 @@ function fetchIPv6Addresses(iface, ipv6Regex) {
                 option.value = "";
                 option.textContent = "未发现IPv6地址";
                 ipv6ListSelect.appendChild(option);
+                ipv6ListSelect.size = 1;
                 
                 // 清空最终IPv6地址选择框
                 const finalSelect = document.getElementById('FinalIPv6Address');
@@ -719,6 +735,10 @@ function setupAccelDomainForm() {
         const originProtocol = this.originProtocol.value;
         data.originProtocol = originProtocol;
         
+        // 添加IPv6状态配置
+        const ipv6Status = this.ipv6Status.value;
+        data.ipv6Status = ipv6Status;
+        
         // 根据协议添加对应的端口
         if (originProtocol === 'FOLLOW' || originProtocol === 'HTTP') {
             data.httpOriginPort = parseInt(this.httpOriginPort.value) || 80;
@@ -767,7 +787,40 @@ function addAccelDomainRow(zoneId, domainName, originConfig) {
   tr.insertCell().innerHTML = `<input type="text" class="form-control" value="${zoneId}" readonly>`;
   tr.insertCell().innerHTML = `<input type="text" class="form-control" value="${domainName}" readonly>`;
   tr.insertCell().innerHTML = `<input type="text" class="form-control" value="${originConfig}" readonly>`;
-  tr.insertCell().innerHTML = `<button type="button" class="btn btn-link text-danger btn-del" onclick="this.closest('tr').remove()">移除</button>`;
+  tr.insertCell().innerHTML = `<button type="button" class="btn btn-link text-danger btn-del" onclick="deleteAccelDomain('${zoneId}', '${domainName}', this)">移除</button>`;
+}
+
+// 删除加速域名
+function deleteAccelDomain(zoneId, domainName, btn) {
+  if (!confirm(`确定要删除加速域名 ${domainName} 吗？`)) {
+    return;
+  }
+  
+  btn.disabled = true;
+  btn.textContent = '删除中...';
+  
+  fetch('/api/delete-accel-domain', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ zoneId: zoneId, domainName: domainName })
+  })
+  .then(response => response.json())
+  .then(result => {
+    if (result.success) {
+      showToast('删除成功', 2000);
+      // 从表格中移除该行
+      btn.closest('tr').remove();
+    } else {
+      showToast(`删除失败: ${result.message || '未知错误'}`, 3000);
+    }
+  })
+  .catch(error => {
+    showToast('请求失败，请稍后重试', 2000);
+  })
+  .finally(() => {
+    btn.disabled = false;
+    btn.textContent = '移除';
+  });
 }
 
 function setAccelDomainsTable(domains) {
@@ -884,7 +937,7 @@ window.onload = function(){
     fetchConfig();
     setupAccelDomainForm();
     fetchAccelDomains(); // 初始化加速域名列表
-    setInterval(()=>fetchStatus(), 4000);
+    setInterval(()=>fetchStatus(), 60000); // 每1分钟轮询一次
 }
 </script>
 </body>
