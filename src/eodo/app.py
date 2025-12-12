@@ -60,14 +60,52 @@ async def get_logs():
 @app.get("/api/config")
 async def get_config():
     """获取配置信息"""
+    config = read_config()
     return {
-        "EdgeOneZoneId": [],
-        "DnsPodRecord": [],
-        "DingTalkWebhook": "",
-        "IntervalMin": 5,
-        "SelectIface": "",
-        "IPv6Regex": ""
+        "TencentCloud": {
+            "SecretId": config.get("secret", {}).get("SecretId", ""),
+            "SecretKey": config.get("secret", {}).get("SecretKey", "")
+        },
+        "EdgeOneZoneId": config.get("zoneId", []),
+        "DnsPodRecord": config.get("dnsPodRecord", []),
+        "DingTalkWebhook": config.get("dingTalkWebhook", ""),
+        "IntervalMin": config.get("intervalMin", 5),
+        "SelectIface": config.get("selectIface", ""),
+        "IPv6Regex": config.get("ipv6Regex", ""),
+        "CustomIPList": config.get("customIPList", [])
     }
+
+@app.post("/api/config")
+async def save_config(request: Request):
+    """保存配置信息"""
+    try:
+        data = await request.json()
+        
+        # 转换配置格式
+        config = {
+            "secret": {
+                "SecretId": data.get("TencentCloud", {}).get("SecretId", ""),
+                "SecretKey": data.get("TencentCloud", {}).get("SecretKey", "")
+            },
+            "zoneId": data.get("EdgeOneZoneId", []),
+            "dnsPodRecord": data.get("DnsPodRecord", []),
+            "dingTalkWebhook": data.get("DingTalkWebhook", ""),
+            "intervalMin": data.get("IntervalMin", 5),
+            "selectIface": data.get("SelectIface", ""),
+            "ipv6Regex": data.get("IPv6Regex", ""),
+            "customIPList": data.get("CustomIPList", [])
+        }
+        
+        # 保存配置
+        if write_config(config):
+            logger.info("配置保存成功")
+            return {"success": True, "msg": "配置已保存"}
+        else:
+            return {"success": False, "msg": "配置保存失败"}
+            
+    except Exception as e:
+        logger.error(f"保存配置时发生异常: {str(e)}", exc_info=True)
+        return {"success": False, "msg": f"保存失败: {str(e)}"}
 
 # 获取加速域名列表
 @app.get("/api/accel-domains")
@@ -163,13 +201,33 @@ hostname = get_hostname()
 
 def read_config():
     """读取YAML配置"""
-    config_path = f"{str(HOME_DIR)}/.eodo.config.yaml"
+    import os
+    config_path = os.environ.get('CONFIG_PATH', f"{str(HOME_DIR)}/.eodo.config.yaml")
     try:
         with open(config_path, 'r', encoding='utf-8') as file:
-            return yaml.safe_load(file)
+            config = yaml.safe_load(file)
+            logger.info(f"配置文件读取成功: {config_path}")
+            return config or {}
     except Exception as exc:
         logger.error(f"配置文件读取失败: {exc}")
         return {}
+
+def write_config(config_data):
+    """写入YAML配置"""
+    import os
+    config_path = os.environ.get('CONFIG_PATH', f"{str(HOME_DIR)}/.eodo.config.yaml")
+    # 确保配置目录存在
+    config_dir = os.path.dirname(config_path)
+    if config_dir and not os.path.exists(config_dir):
+        os.makedirs(config_dir, exist_ok=True)
+    try:
+        with open(config_path, 'w', encoding='utf-8') as file:
+            yaml.dump(config_data, file, allow_unicode=True, default_flow_style=False)
+        logger.info(f"配置保存成功: {config_path}")
+        return True
+    except Exception as exc:
+        logger.error(f"配置保存失败: {exc}")
+        return False
 
 
 # =================== 腾讯云API类 ===================

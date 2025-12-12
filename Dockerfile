@@ -37,11 +37,21 @@ COPY src ./src
 COPY README.md ./
 COPY img.png ./
 
-# 设置环境变量（可选）
+# 创建配置目录
+RUN mkdir -p /app/config
+
+# 设置配置目录为挂载点
+VOLUME ["/app/config"]
+
+# 设置环境变量
 ENV PYTHONUNBUFFERED=1
+ENV CONFIG_PATH="/app/config/eodo.config.yaml"
 
 # 暴露端口
 EXPOSE 54321
 
-# 启动命令
-CMD ["python", "src/eodo/app.py", "-p", "54321"]
+# 创建初始化配置文件的脚本
+RUN echo 'import yaml; import os; config_dir = "/app/config"; if not os.path.exists(config_dir): os.makedirs(config_dir); config_path = os.environ.get("CONFIG_PATH", "/app/config/eodo.config.yaml"); if not os.path.exists(config_path): default_config = {"TencentCloud": {"SecretId": "", "SecretKey": ""}, "EdgeOne": {"ZoneId": []}, "DnsPod": {"Record": []}, "DingTalk": {"Webhook": ""}, "Interval": 5, "SelectIface": "", "IPv6Regex": "", "CustomIPList": []}; with open(config_path, "w") as f: yaml.dump(default_config, f); print(f"Default config file created at {config_path}")' > /app/init_config.py
+
+# 启动命令，先初始化配置文件，再启动应用
+CMD ["sh", "-c", "python /app/init_config.py && python src/eodo/app.py -p 54321"]
