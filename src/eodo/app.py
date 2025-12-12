@@ -54,7 +54,24 @@ async def get_status():
 @app.get("/api/logs")
 async def get_logs():
     """获取日志信息"""
-    return {"logs": []}
+    try:
+        log_file = f"{TEMP_DIR}/eodo.task.log.txt"
+        logs = []
+        
+        if os.path.exists(log_file):
+            # 读取最新的100行日志
+            with open(log_file, 'r', encoding='utf-8') as f:
+                # 使用deque保持最新的100行
+                from collections import deque
+                logs = list(deque(f, 100))
+            
+            # 清理日志行并反转顺序（最新的在前）
+            logs = [line.strip() for line in reversed(logs) if line.strip()]
+        
+        return {"logs": logs}
+    except Exception as e:
+        logger.error(f"读取日志文件失败: {str(e)}")
+        return {"logs": [f"读取日志失败: {str(e)}"]}
 
 # 配置API
 @app.get("/api/config")
@@ -177,33 +194,56 @@ async def get_ipv6_addresses(iface: str = Query(...), regex: str = Query("")):
 # 获取源站组列表
 @app.get("/api/origin-groups/{zone_id}")
 async def get_origin_groups(zone_id: str):
-    """获取指定ZoneID的所有源站组"""
+    """获取指定ZoneID的源站组列表"""
     try:
+        logger.info(f"获取源站组列表请求，ZoneID: {zone_id}")
+        
         # 读取配置
         config = read_config()
         secret = config.get("secret", {})
-        if not secret:
-            return {"success": False, "message": "未配置腾讯云密钥"}
+        
+        # 验证配置
+        if not secret.get("SecretId") or not secret.get("SecretKey"):
+            error_msg = "缺少必要的API密钥配置"
+            logger.error(f"获取源站组列表失败: {error_msg}")
+            return {"success": False, "message": error_msg}
+        
+        # 创建客户端
+        client = QcloudClient(secret)
+        
+        # 处理可能的列表类型ZoneId
+        if isinstance(zone_id, list) and zone_id:
+            zone_id = zone_id[0]
         
         # 确保zone_id是字符串类型
         zone_id = str(zone_id)
         
-        # 创建客户端并调用查询接口
-        client = QcloudClient(secret)
+        # 调用API获取源站组列表
         response = client.describe_all_origin_groups(zone_id)
         
-        # 处理响应
-        if "Error" in response:
+        # 检查是否有错误
+        if response.get("Error"):
             error_msg = response["Error"].get("Message", "获取源站组列表失败")
             logger.error(f"获取源站组列表失败: {error_msg}")
             return {"success": False, "message": error_msg}
         else:
-            origin_groups = response.get("OriginGroups", [])
-            logger.info(f"获取源站组列表成功，共 {len(origin_groups)} 个源站组")
-            return {"success": True, "originGroups": origin_groups}
+            # 转换API返回格式以匹配前端期望
+            origin_groups_api = response.get("OriginGroups", [])
+            # 转换为前端期望的格式：{groupId, name, type}
+            formatted_groups = []
+            for group in origin_groups_api:
+                formatted_group = {
+                    "groupId": group.get("OriginGroupId", ""),
+                    "name": group.get("Name", ""),
+                    "type": group.get("Type", "")
+                }
+                formatted_groups.append(formatted_group)
+            
+            logger.info(f"获取源站组列表成功，共 {len(formatted_groups)} 个源站组")
+            return {"success": True, "originGroups": formatted_groups}
     except Exception as e:
         logger.error(f"获取源站组列表时发生异常: {str(e)}", exc_info=True)
-        return {"success": False, "message": str(e)}
+        return {"success": False, "message": f"获取源站组列表时发生异常: {str(e)}"}
 
 
 # =================== 日志与配置 ===================
