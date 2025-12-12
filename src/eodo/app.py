@@ -124,9 +124,16 @@ async def get_accel_domains(zone_id: str = Query(None, description="区域ID")):
             if not zone_id:
                 return {"success": False, "message": "未提供ZoneId且配置中未设置"}
         
+        # 确保zone_id是字符串类型
+        if isinstance(zone_id, list):
+            if zone_id:
+                zone_id = zone_id[0]  # 取列表第一个元素
+            else:
+                return {"success": False, "message": "ZoneId列表为空"}
+        
         # 创建客户端并调用查询接口
         client = QcloudClient(secret)
-        domains, error = client.describe_acceleration_domains(zone_id)
+        domains, error = client.describe_acceleration_domains(str(zone_id))
         
         if error:
             return {"success": False, "message": error}
@@ -166,6 +173,37 @@ async def get_ipv6_addresses(iface: str = Query(...), regex: str = Query("")):
     except Exception as e:
         logger.error(f"获取IPv6地址失败: {str(e)}")
         return []
+
+# 获取源站组列表
+@app.get("/api/origin-groups/{zone_id}")
+async def get_origin_groups(zone_id: str):
+    """获取指定ZoneID的所有源站组"""
+    try:
+        # 读取配置
+        config = read_config()
+        secret = config.get("secret", {})
+        if not secret:
+            return {"success": False, "message": "未配置腾讯云密钥"}
+        
+        # 确保zone_id是字符串类型
+        zone_id = str(zone_id)
+        
+        # 创建客户端并调用查询接口
+        client = QcloudClient(secret)
+        response = client.describe_all_origin_groups(zone_id)
+        
+        # 处理响应
+        if "Error" in response:
+            error_msg = response["Error"].get("Message", "获取源站组列表失败")
+            logger.error(f"获取源站组列表失败: {error_msg}")
+            return {"success": False, "message": error_msg}
+        else:
+            origin_groups = response.get("OriginGroups", [])
+            logger.info(f"获取源站组列表成功，共 {len(origin_groups)} 个源站组")
+            return {"success": True, "originGroups": origin_groups}
+    except Exception as e:
+        logger.error(f"获取源站组列表时发生异常: {str(e)}", exc_info=True)
+        return {"success": False, "message": str(e)}
 
 
 # =================== 日志与配置 ===================
@@ -292,11 +330,11 @@ class QcloudClient:
     def modify_origin_group(self, zone_id, origin_group_id, origin_group_name, ipv6_addresses):
         """修改源站组配置，更新IPv6地址列表"""
         try:
-            # 构建API请求参数
+            # 构建API请求参数，确保zone_id是字符串类型
             params = {
                 "Action": "ModifyOriginGroup",
                 "Version": "2023-05-01",
-                "ZoneId": zone_id,
+                "ZoneId": str(zone_id),
                 "OriginGroupId": origin_group_id,
                 "OriginGroup": {
                     "Name": origin_group_name,
@@ -347,7 +385,8 @@ class QcloudClient:
         
     def describe_all_origin_groups(self, zone_id):
         """获取指定ZoneID的所有源站组"""
-        body = {"ZoneId": zone_id}
+        # 确保zone_id是字符串类型
+        body = {"ZoneId": str(zone_id)}
         response = requests.post(
             f'https://{self.host}', headers=self.signature('DescribeOriginGroup', body), json=body
         ).json()
@@ -356,11 +395,11 @@ class QcloudClient:
     def create_origin_group(self, zone_id, origin_group_name, ipv6_addresses):
         """创建源站组，添加IPv6地址列表"""
         try:
-            # 构建API请求参数
+            # 构建API请求参数，确保zone_id是字符串类型
             params = {
                 "Action": "CreateOriginGroup",
                 "Version": "2023-05-01",
-                "ZoneId": zone_id,
+                "ZoneId": str(zone_id),
                 "OriginGroup": {
                     "Name": origin_group_name,
                     "OriginType": "ip",
@@ -449,9 +488,9 @@ class QcloudClient:
         参考文档: https://cloud.tencent.com/document/api/1552/86336
         """
         try:
-            # 构建请求参数
+            # 构建请求参数，确保zone_id是字符串类型
             body = {
-                "ZoneId": zone_id
+                "ZoneId": str(zone_id)
             }
             
             logger.info(f"[{self.task_id}] 查询加速域名列表，ZoneId: {zone_id}")
@@ -506,9 +545,9 @@ class QcloudClient:
         参考文档: https://cloud.tencent.com/document/api/1552/86338
         """
         try:
-            # 构建请求参数
+            # 构建请求参数，确保zone_id是字符串类型
             body = {
-                "ZoneId": zone_id,
+                "ZoneId": str(zone_id),
                 "Domain": domain_name,
                 "Type": "site"
             }
