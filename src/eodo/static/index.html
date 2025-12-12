@@ -53,6 +53,103 @@
     </div>
   </div>
 
+  <!-- 创建加速域名 -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <span class="card-title">创建加速域名</span>
+    </div>
+    <div class="card-body">
+      <form id="createAccelDomainForm" autocomplete="off">
+        <div class="row g-3 mb-3">
+          <div class="col-md-6">
+            <label class="form-label required">站点ZoneID</label>
+            <select class="form-select" name="accelZoneId" id="accelZoneId" required></select>
+            <div id="zoneIdFallback" class="mt-2">
+              <input class="form-control" type="text" name="accelZoneIdCustom" id="accelZoneIdCustom" placeholder="手动输入ZoneID（当列表为空时）">
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label required">加速域名</label>
+            <input class="form-control" type="text" name="accelDomainName" id="accelDomainName" required placeholder="例如：example.com">
+          </div>
+        </div>
+        <div class="mb-3">
+          <div class="form-label">源站配置（二选一）</div>
+          <div class="d-flex gap-2 mb-2">
+            <label class="form-check form-check-inline">
+              <input class="form-check-input" type="radio" name="originType" value="group" checked>
+              <span class="form-check-label">使用源站组</span>
+            </label>
+            <label class="form-check form-check-inline">
+              <input class="form-check-input" type="radio" name="originType" value="direct">
+              <span class="form-check-label">直接指定源站</span>
+            </label>
+          </div>
+          <div id="originGroupDiv">
+            <label class="form-label">源站组ID</label>
+            <select class="form-select" name="originGroupId" id="originGroupId" placeholder="留空使用当前主机名对应的源站组">
+              <option value="">留空使用当前主机名对应的源站组</option>
+            </select>
+            <div class="mt-1 text-sm text-muted" id="originGroupsLoading">请先选择ZoneID</div>
+          </div>
+          <div id="originDirectDiv" class="d-none">
+            <label class="form-label">源站地址</label>
+            <input class="form-control" type="text" name="originAddress" id="originAddress" placeholder="例如：1.1.1.1 或 example.com">
+          </div>
+          
+          <!-- 回源配置 -->
+          <div class="mt-3">
+            <label class="form-label">回源协议</label>
+            <select class="form-select" name="originProtocol" id="originProtocol">
+              <option value="FOLLOW">协议跟随（FOLLOW）</option>
+              <option value="HTTP">HTTP协议回源</option>
+              <option value="HTTPS">HTTPS协议回源</option>
+            </select>
+          </div>
+          
+          <!-- 回源端口配置 -->
+          <div id="httpPortDiv" class="mt-2">
+            <label class="form-label">HTTP回源端口</label>
+            <input class="form-control" type="number" name="httpOriginPort" id="httpOriginPort" min="1" max="65535" value="80" placeholder="默认为80">
+          </div>
+          <div id="httpsPortDiv" class="mt-2">
+            <label class="form-label">HTTPS回源端口</label>
+            <input class="form-control" type="number" name="httpsOriginPort" id="httpsOriginPort" min="1" max="65535" value="443" placeholder="默认为443">
+          </div>
+        </div>
+        <div class="text-end">
+          <button type="submit" class="btn btn-primary">创建加速域名</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  
+  <!-- 已创建加速域名列表 -->
+  <div class="card mb-4">
+    <div class="card-header">
+      <span class="card-title">已创建加速域名列表</span>
+    </div>
+    <div class="card-body">
+      <div class="mb-2">
+        <button type="button" class="btn btn-outline-primary btn-sm" onclick="fetchAccelDomains()">刷新列表</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="table table-vcenter table-striped table-bordered mb-3" id="AccelDomainsTable">
+          <thead>
+            <tr>
+              <th>ZoneID</th>
+              <th>加速域名</th>
+              <th>源站配置</th>
+              <th style="width:60px"></th>
+            </tr>
+          </thead>
+          <tbody>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- 配置管理 -->
   <div class="card mb-4">
     <div class="card-header">
@@ -113,13 +210,32 @@
         <div class="mb-3">
           <input class="form-control" type="text" name="DingTalkWebhook" id="DingTalkWebhook" placeholder="https://oapi.dingtalk.com/robot/send?access_token=...">
         </div>
-        <!-- 网络接口/提交 -->
+        <!-- IPv6地址显示/网络接口/提交 -->
         <div class="row">
           <div class="col-md-4 mb-2">
+            <label class="form-label">当前网口IPv6地址</label>
+            <select class="form-select" name="CurrentIPv6List" id="CurrentIPv6List" disabled></select>
+          </div>
+          <div class="col-md-3 mb-2">
             <label class="form-label">选择网络接口</label>
             <select class="form-select" name="SelectIface" id="SelectIface"></select>
           </div>
-          <div class="col-md-8 text-end align-self-end d-flex gap-1 justify-content-end align-items-center">
+          <div class="col-md-5 mb-2">
+            <label class="form-label">最终IPv6地址</label>
+            <select class="form-select" name="FinalIPv6Address" id="FinalIPv6Address" disabled></select>
+          </div>
+          <div class="col-md-5 mb-2">
+            <label class="form-label">IPv6地址选择 (正则表达式或索引)</label>
+            <input class="form-control" type="text" name="IPv6Regex" id="IPv6Regex" placeholder="@1/@2选择第1/2个地址，或使用正则表达式">
+          </div>
+          <div class="col-md-12 mb-2">
+            <label class="form-label">自定义IP地址列表 (每行一个IP，支持IPv4和IPv6)</label>
+            <textarea class="form-control" name="CustomIPList" id="CustomIPList" rows="3" placeholder="在此输入自定义IP地址，每行一个
+例如：
+192.168.1.1
+2001:db8::1"></textarea>
+          </div>
+          <div class="text-end">
             <button type="submit" class="btn btn-success" id="submitConfig">
               保存配置
             </button>
@@ -142,7 +258,10 @@
         <pre id="logs-modal-pre">加载中...</pre>
         <div class="d-flex justify-content-between mt-1">
           <span></span>
-          <button class="btn btn-outline-secondary btn-sm" onclick="fetchLogsModal();">手动刷新</button>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-secondary btn-sm" onclick="fetchLogsModal();">手动刷新</button>
+            <button class="btn btn-outline-danger btn-sm" onclick="clearLogsModal();">清除日志</button>
+          </div>
         </div>
       </div>
     </div>
@@ -208,6 +327,48 @@ function setEdgeOneTable(arr) {
   let tb = document.getElementById("EdgeOneTable").getElementsByTagName("tbody")[0];
   tb.innerHTML = "";
   (arr||[]).forEach(val=>addEdgeOneRow(val));
+  
+  // 更新ZoneID选择器
+  updateZoneIdSelector();
+}
+
+// 更新ZoneID选择器
+function updateZoneIdSelector() {
+  const zoneIds = getEdgeOneZoneArr();
+  const select = document.getElementById('accelZoneId');
+  const fallbackDiv = document.getElementById('zoneIdFallback');
+  
+  // 清空选择器
+  select.innerHTML = '';
+  
+  if (zoneIds.length > 0) {
+    // 有多个ZoneID时显示选择器
+    select.style.display = 'block';
+    fallbackDiv.style.display = 'none';
+    
+    // 添加选项
+    zoneIds.forEach(zoneId => {
+      const option = document.createElement('option');
+      option.value = zoneId;
+      option.textContent = zoneId;
+      select.appendChild(option);
+    });
+    
+    // 如果有默认选中的ZoneID，自动获取源站组列表
+    if (select.value) {
+      fetchOriginGroups(select.value);
+    }
+  } else {
+    // 没有ZoneID时隐藏选择器，显示输入框
+    select.style.display = 'none';
+    fallbackDiv.style.display = 'block';
+    
+    // 清空源站组选择器
+    const originGroupSelect = document.getElementById('originGroupId');
+    const loadingText = document.getElementById('originGroupsLoading');
+    originGroupSelect.innerHTML = '<option value="">留空使用当前主机名对应的源站组</option>';
+    loadingText.textContent = '请先选择ZoneID';
+  }
 }
 function getEdgeOneZoneArr() {
   let tb = document.getElementById("EdgeOneTable").getElementsByTagName("tbody")[0];
@@ -260,11 +421,123 @@ function fetchConfig(){
                 if(res.SelectIface==i)o.selected=true;
                 sel.appendChild(o);
             });
+            
+            // 初始化后获取IPv6地址
+            if(sel.value) {
+                fetchIPv6Addresses(sel.value, res?.IPv6Regex||"");
+            }
+            
+            // 添加接口切换事件监听
+            sel.onchange = function() {
+                fetchIPv6Addresses(this.value, document.getElementById('IPv6Regex').value);
+            };
         });
+        document.getElementById('IPv6Regex').value = res?.IPv6Regex||"";
+        
+        // 加载自定义IP列表，将数组转换为多行文本
+        if(Array.isArray(res?.CustomIPList) && res.CustomIPList.length > 0) {
+            document.getElementById('CustomIPList').value = res.CustomIPList.join('\n');
+        } else {
+            document.getElementById('CustomIPList').value = '';
+        }
+        
+        // 添加IPv6Regex输入变化事件
+        document.getElementById('IPv6Regex').oninput = function() {
+            const iface = document.getElementById('SelectIface').value;
+            if(iface) {
+                fetchIPv6Addresses(iface, this.value);
+            }
+        };
     }).catch(()=>{showToast("配置加载失败",2200);});
+}
+
+// 获取并更新IPv6地址列表
+function fetchIPv6Addresses(iface, ipv6Regex) {
+    fetch(`/api/ipv6-addresses?iface=${encodeURIComponent(iface)}`)
+        .then(r=>r.json())
+        .then(addresses=>{
+            // 更新当前网口IPv6地址选择框
+            const ipv6ListSelect = document.getElementById('CurrentIPv6List');
+            ipv6ListSelect.innerHTML = "";
+            
+            if(addresses.length > 0) {
+                addresses.forEach(addr=>{
+                    let option = document.createElement('option');
+                    option.value = option.textContent = addr;
+                    ipv6ListSelect.appendChild(option);
+                });
+                
+                // 根据IPv6Regex选择最终地址
+                updateFinalIPv6Address(addresses, ipv6Regex);
+            } else {
+                let option = document.createElement('option');
+                option.value = "";
+                option.textContent = "未发现IPv6地址";
+                ipv6ListSelect.appendChild(option);
+                
+                // 清空最终IPv6地址选择框
+                const finalSelect = document.getElementById('FinalIPv6Address');
+                finalSelect.innerHTML = "";
+                option = document.createElement('option');
+                option.value = "";
+                option.textContent = "未选择IPv6地址";
+                finalSelect.appendChild(option);
+            }
+        })
+        .catch(()=>{
+            showToast("获取IPv6地址失败",2200);
+        });
+}
+
+// 根据正则表达式或索引选择最终IPv6地址
+function updateFinalIPv6Address(addresses, ipv6Regex) {
+    const finalSelect = document.getElementById('FinalIPv6Address');
+    finalSelect.innerHTML = "";
+    
+    let selectedAddr = null;
+    
+    if(ipv6Regex) {
+        // 处理索引格式 @1, @2 等
+        if(ipv6Regex.startsWith('@')) {
+            const index = parseInt(ipv6Regex.substring(1)) - 1;
+            if(!isNaN(index) && index >= 0 && index < addresses.length) {
+                selectedAddr = addresses[index];
+            }
+        } else {
+            // 处理正则表达式
+            try {
+                const regex = new RegExp(ipv6Regex);
+                selectedAddr = addresses.find(addr => regex.test(addr));
+            } catch(e) {
+                // 正则表达式无效，忽略
+            }
+        }
+    }
+    
+    // 如果没有匹配的地址，使用第一个地址
+    if(!selectedAddr && addresses.length > 0) {
+        selectedAddr = addresses[0];
+    }
+    
+    if(selectedAddr) {
+        let option = document.createElement('option');
+        option.value = option.textContent = selectedAddr;
+        option.selected = true;
+        finalSelect.appendChild(option);
+    } else {
+        let option = document.createElement('option');
+        option.value = "";
+        option.textContent = "未找到匹配的IPv6地址";
+        finalSelect.appendChild(option);
+    }
 }
 document.getElementById('configForm').onsubmit = function(e){
     e.preventDefault();
+    // 处理自定义IP列表，按行分割并过滤空行
+    const customIPs = this.CustomIPList.value.split('\n')
+      .map(ip => ip.trim())
+      .filter(ip => ip);
+    
     let data = {
       TencentCloud: {
         SecretId: this.SecretId.value.trim(),
@@ -274,6 +547,8 @@ document.getElementById('configForm').onsubmit = function(e){
       DnsPodRecord: getDnsPodRecordArr(),
       DingTalkWebhook: this.DingTalkWebhook.value.trim(),
       SelectIface: this.SelectIface.value,
+      IPv6Regex: this.IPv6Regex.value.trim(),
+      CustomIPList: customIPs,
       IntervalMin: Number(document.getElementById('interval').value)||15
     };
     document.getElementById('submitConfig').disabled = true;
@@ -290,12 +565,19 @@ document.getElementById('configForm').onsubmit = function(e){
       });
 };
 // ---- 日志模态 ----
-function fetchLogsModal(){
+function fetchLogsModal(){    
     let logsdom = document.getElementById('logs-modal-pre');
     logsdom.textContent = "加载中...";
     fetch('/api/logs').then(r=>r.json()).then(res=>{
         logsdom.textContent = res.logs||"无日志";
     }).catch(()=>{logsdom.textContent="日志加载失败";});
+}
+
+// 清除日志
+function clearLogsModal(){
+    let logsdom = document.getElementById('logs-modal-pre');
+    logsdom.textContent = "日志已清除";
+    showToast("日志已清除");
 }
 function openLogModal(){
     fetchLogsModal();
@@ -305,6 +587,288 @@ function openLogModal(){
     modal.addEventListener('hidden.bs.modal', ()=>{
         if(openLogModal._timer){ clearInterval(openLogModal._timer); openLogModal._timer = null; }
     }, {once: true});
+}
+
+// ---- 创建加速域名
+function setupAccelDomainForm() {
+    // 初始化ZoneID选择器
+    updateZoneIdSelector();
+    
+    // 源站类型切换
+    const originTypeRadios = document.querySelectorAll('input[name="originType"]');
+    const groupDiv = document.getElementById('originGroupDiv');
+    const directDiv = document.getElementById('originDirectDiv');
+    const originGroupInput = document.getElementById('originGroupId');
+    const originAddressInput = document.getElementById('originAddress');
+    
+    function updateOriginFields() {
+        const selectedType = document.querySelector('input[name="originType"]:checked').value;
+        
+        if (selectedType === 'group') {
+            groupDiv.classList.remove('d-none');
+            directDiv.classList.add('d-none');
+            originGroupInput.removeAttribute('disabled');
+            originAddressInput.setAttribute('disabled', 'disabled');
+        } else {
+            groupDiv.classList.add('d-none');
+            directDiv.classList.remove('d-none');
+            originGroupInput.setAttribute('disabled', 'disabled');
+            originAddressInput.removeAttribute('disabled');
+        }
+    }
+    
+    originTypeRadios.forEach(radio => {
+        radio.addEventListener('change', updateOriginFields);
+    });
+    
+    updateOriginFields();
+    
+    // 监听ZoneID变化，更新源站组列表
+    const zoneIdSelect = document.getElementById('accelZoneId');
+    const zoneIdCustom = document.getElementById('accelZoneIdCustom');
+    
+    if (zoneIdSelect) {
+      zoneIdSelect.addEventListener('change', function() {
+        if (this.value.trim()) {
+          fetchOriginGroups(this.value.trim());
+        }
+      });
+    }
+    
+    if (zoneIdCustom) {
+      zoneIdCustom.addEventListener('input', function() {
+        const value = this.value.trim();
+        if (value) {
+          fetchOriginGroups(value);
+        } else {
+          const select = document.getElementById('originGroupId');
+          const loadingText = document.getElementById('originGroupsLoading');
+          select.innerHTML = '<option value="">留空使用当前主机名对应的源站组</option>';
+          loadingText.textContent = '请先选择ZoneID';
+        }
+      });
+    }
+    
+    // 回源协议选择器事件监听
+    document.getElementById('originProtocol').addEventListener('change', function() {
+      const protocol = this.value;
+      const httpPortDiv = document.getElementById('httpPortDiv');
+      const httpsPortDiv = document.getElementById('httpsPortDiv');
+      
+      if (protocol === 'FOLLOW') {
+        // 协议跟随：显示两个端口
+        httpPortDiv.classList.remove('d-none');
+        httpsPortDiv.classList.remove('d-none');
+      } else if (protocol === 'HTTP') {
+        // HTTP协议：只显示HTTP端口
+        httpPortDiv.classList.remove('d-none');
+        httpsPortDiv.classList.add('d-none');
+      } else if (protocol === 'HTTPS') {
+        // HTTPS协议：只显示HTTPS端口
+        httpPortDiv.classList.add('d-none');
+        httpsPortDiv.classList.remove('d-none');
+      }
+    });
+    
+    // 初始加载时触发一次，确保端口显示正确
+    document.getElementById('originProtocol').dispatchEvent(new Event('change'));
+    
+    // 表单提交
+    document.getElementById('createAccelDomainForm').onsubmit = function(e) {
+        e.preventDefault();
+        
+        // 获取ZoneID（从选择器或手动输入中）
+        let zoneId = '';
+        const select = document.getElementById('accelZoneId');
+        const customInput = document.getElementById('accelZoneIdCustom');
+        
+        if (select.style.display !== 'none') {
+          zoneId = select.value.trim();
+        } else {
+          zoneId = customInput.value.trim();
+        }
+        
+        const domainName = this.accelDomainName.value.trim();
+        
+        if (!zoneId || !domainName) {
+            showToast('请填写必填字段', 2000);
+            return;
+        }
+        
+        const originType = document.querySelector('input[name="originType"]:checked').value;
+        let data = {
+            zoneId: zoneId,
+            domainName: domainName
+        };
+        
+        if (originType === 'group') {
+            const groupId = this.originGroupId.value;
+            if (groupId) {
+                data.originGroupId = groupId;
+            }
+        } else {
+            const originAddr = this.originAddress.value.trim();
+            if (!originAddr) {
+                showToast('请填写源站地址', 2000);
+                return;
+            }
+            data.originAddress = originAddr;
+        }
+        
+        // 添加回源配置
+        const originProtocol = this.originProtocol.value;
+        data.originProtocol = originProtocol;
+        
+        // 根据协议添加对应的端口
+        if (originProtocol === 'FOLLOW' || originProtocol === 'HTTP') {
+            data.httpOriginPort = parseInt(this.httpOriginPort.value) || 80;
+        }
+        
+        if (originProtocol === 'FOLLOW' || originProtocol === 'HTTPS') {
+            data.httpsOriginPort = parseInt(this.httpsOriginPort.value) || 443;
+        }
+        
+        const submitBtn = this.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = '创建中...';
+        
+        // 调用后端API创建加速域名
+        fetch('/api/create-accel-domain', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        })
+        .then(response => response.json())
+        .then(result => {
+            if (result.success) {
+                showToast('创建成功', 2000);
+                // 重置表单
+                this.reset();
+                // 刷新加速域名列表
+                fetchAccelDomains();
+            } else {
+                showToast(`创建失败: ${result.message || '未知错误'}`, 3000);
+            }
+        })
+        .catch(error => {
+            showToast('请求失败，请稍后重试', 2000);
+        })
+        .finally(() => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = '创建加速域名';
+        });
+    };
+}
+
+// ---- 加速域名列表管理
+function addAccelDomainRow(zoneId, domainName, originConfig) {
+  let tb = document.getElementById("AccelDomainsTable").getElementsByTagName("tbody")[0];
+  let tr = tb.insertRow();
+  tr.insertCell().innerHTML = `<input type="text" class="form-control" value="${zoneId}" readonly>`;
+  tr.insertCell().innerHTML = `<input type="text" class="form-control" value="${domainName}" readonly>`;
+  tr.insertCell().innerHTML = `<input type="text" class="form-control" value="${originConfig}" readonly>`;
+  tr.insertCell().innerHTML = `<button type="button" class="btn btn-link text-danger btn-del" onclick="this.closest('tr').remove()">移除</button>`;
+}
+
+function setAccelDomainsTable(domains) {
+  let tb = document.getElementById("AccelDomainsTable").getElementsByTagName("tbody")[0];
+  tb.innerHTML = "";
+  (domains||[]).forEach(domain => {
+    // 格式化源站配置显示
+    let originConfig = '';
+    if (domain.originGroupId) {
+      originConfig = `源站组: ${domain.originGroupId}`;
+    } else if (domain.originAddress) {
+      originConfig = `直接源站: ${domain.originAddress}`;
+    } else {
+      originConfig = '默认源站组';
+    }
+    
+    // 添加回源协议和端口信息
+    if (domain.originProtocol) {
+      originConfig += `, 协议: ${domain.originProtocol}`;
+      
+      // 根据协议添加对应的端口
+      if (domain.originProtocol === 'FOLLOW' || domain.originProtocol === 'HTTP') {
+        originConfig += `, HTTP端口: ${domain.httpOriginPort || 80}`;
+      }
+      
+      if (domain.originProtocol === 'FOLLOW' || domain.originProtocol === 'HTTPS') {
+        originConfig += `, HTTPS端口: ${domain.httpsOriginPort || 443}`;
+      }
+    }
+    
+    addAccelDomainRow(domain.zoneId, domain.domainName, originConfig);
+  });
+}
+
+// 获取源站组列表
+function fetchOriginGroups(zoneId) {
+  const select = document.getElementById('originGroupId');
+  const loadingText = document.getElementById('originGroupsLoading');
+  
+  // 清空并禁用选择器，显示加载状态
+  select.innerHTML = '<option value="">加载中...</option>';
+  select.disabled = true;
+  loadingText.textContent = '加载源站组列表中...';
+  
+  // 调用API获取源站组列表
+  fetch(`/api/origin-groups/${encodeURIComponent(zoneId)}`)
+    .then(response => response.json())
+    .then(result => {
+      select.innerHTML = '<option value="">留空使用当前主机名对应的源站组</option>';
+      select.disabled = false;
+      loadingText.textContent = '';
+      
+      if (result.success) {
+        if (result.originGroups && result.originGroups.length > 0) {
+          result.originGroups.forEach(group => {
+            const option = document.createElement('option');
+            option.value = group.groupId;
+            option.textContent = `${group.name} (${group.type || group.groupId})`;
+            select.appendChild(option);
+          });
+        } else {
+          loadingText.textContent = '该ZoneID下无可用源站组';
+        }
+      } else {
+        // 使用后端返回的统一错误提示
+        loadingText.textContent = result.message || '获取源站组列表失败';
+        showToast(loadingText.textContent, 3000);
+      }
+    })
+    .catch(error => {
+      select.innerHTML = '<option value="">留空使用当前主机名对应的源站组</option>';
+      select.disabled = false;
+      const errorMsg = '获取源站组列表失败，请检查SecretId、SecretKey和EdgeOne站点配置的ZoneID是否正确';
+      loadingText.textContent = errorMsg;
+      showToast(errorMsg, 3000);
+    });
+}
+
+function fetchAccelDomains() {
+  // 显示加载状态
+  let tb = document.getElementById("AccelDomainsTable").getElementsByTagName("tbody")[0];
+  tb.innerHTML = '<tr><td colspan="4" class="text-center">加载中...</td></tr>';
+  
+  // 调用API获取加速域名列表
+  fetch('/api/accel-domains')
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        setAccelDomainsTable(data.domains || []);
+        if (!data.domains || data.domains.length === 0) {
+          tb.innerHTML = '<tr><td colspan="4" class="text-center text-muted">暂无加速域名</td></tr>';
+        }
+      } else {
+        showToast(`获取加速域名列表失败: ${data.message || '未知错误'}`, 2000);
+        tb.innerHTML = '<tr><td colspan="4" class="text-center text-danger">获取失败，请重试</td></tr>';
+      }
+    })
+    .catch(error => {
+      showToast('网络请求失败，请稍后重试', 2000);
+      tb.innerHTML = '<tr><td colspan="4" class="text-center text-danger">网络错误，请重试</td></tr>';
+    });
 }
 
 // ---- runTask
@@ -318,6 +882,8 @@ function runTask(){
 window.onload = function(){
     fetchStatus();
     fetchConfig();
+    setupAccelDomainForm();
+    fetchAccelDomains(); // 初始化加速域名列表
     setInterval(()=>fetchStatus(), 4000);
 }
 </script>

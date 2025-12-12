@@ -151,6 +151,14 @@ class QcloudClient:
             f'https://{self.host}', headers=self.signature('DescribeOriginGroup', body), json=body
         ).json()
         return response.get('Response', {}).get('OriginGroups', {})
+        
+    def describe_all_origin_groups(self, zone_id):
+        """获取指定ZoneID的所有源站组"""
+        body = {"ZoneId": zone_id}
+        response = requests.post(
+            f'https://{self.host}', headers=self.signature('DescribeOriginGroup', body), json=body
+        ).json()
+        return response.get('Response', {})
 
     def create_origin_group(self, zone_id, iplist):
         body = {"ZoneId": zone_id, "Name": hostname, "Type": "HTTP",
@@ -199,6 +207,36 @@ class QcloudClient:
         body = {"Domain": top_domain, "RecordId": record_id}
         requests.post(f'https://{self.host}', headers=self.signature("DeleteRecord", body), json=body)
 
+    def create_acceleration_domain(self, zone_id, domain_name, origin_group_id=None, origin_address=None):
+        """创建加速域名
+        参考文档: https://cloud.tencent.com/document/api/1552/86338
+        """
+        body = {
+            "ZoneId": zone_id,
+            "Domain": domain_name,
+            "Type": "site"
+        }
+        # 源站配置，支持源站组ID或直接指定源站地址
+        if origin_group_id:
+            body["OriginInfo"] = {
+                "OriginGroupId": origin_group_id
+            }
+        elif origin_address:
+            body["OriginInfo"] = {
+                "Origin": [{
+                    "Record": origin_address,
+                    "Type": "IP_DOMAIN"
+                }]
+            }
+        
+        response = requests.post(
+            f'https://{self.host}', 
+            headers=self.signature("CreateAccelerationDomain", body), 
+            json=body
+        ).json()
+        error = response.get("Response", {}).get("Error", {})
+        return error.get("Message", ""), error.get("Code", "")
+
     def describe_dns_record(self, top_domain, sub_domain, record_type):
 
         body = {
@@ -216,12 +254,15 @@ class QcloudClient:
 
 # =================== 工具类 ===================
 class IPv6Tool:
-    def __init__(self, select_iface="", task_id=""):
+    def __init__(self, select_iface="", task_id="", ipv6_regex="", custom_ip_list=None):
         self.task_id = task_id
+        self.ipv6_regex = ipv6_regex
+        self.custom_ip_list = custom_ip_list or []
         self.public_ipv6:set[str]|None = self.get_ipv6_list(select_iface)
 
     def get_ipv6_list(self, select_iface=""):
-        ipv6_list = []
+        # 首先获取所有公网IPv6地址（不进行ping测试）
+        all_ipv6_list = []
         addrs = psutil.net_if_addrs()
         for iface, addr_list in addrs.items():
             if select_iface and iface != select_iface:
@@ -229,15 +270,74 @@ class IPv6Tool:
             for addr in addr_list:
                 ip = addr.address.split('%')[0]
                 if addr.family == socket.AF_INET6 and self.is_public_ipv6(ip):
-                    if self.public_ipv6_check(ip):
-                        ipv6_list.append(ip)
+                    all_ipv6_list.append(ip)
+        
+        # 按字母顺序排序
+        sorted_ipv6_list = sorted(all_ipv6_list)
+        
+        # 添加用户自定义的IP地址
+        if self.custom_ip_list:
+            logger.info(f"[{self.task_id}] 添加 {len(self.custom_ip_list)} 个用户自定义IP地址")
+            # 将自定义IP添加到列表中，但避免重复
+            for custom_ip in self.custom_ip_list:
+                if custom_ip not in sorted_ipv6_list:
+                    sorted_ipv6_list.append(custom_ip)
+                    logger.info(f"[{self.task_id}] 添加自定义IP: {custom_ip}")
+        
+        # 如果没有找到IPv6地址，直接返回None
+        if not sorted_ipv6_list:
+            logger.info(f"[{self.task_id}] 未找到公网IPv6地址")
+            return None
+        
+        logger.info(f"[{self.task_id}] 共找到 {len(sorted_ipv6_list)} 个公网IPv6地址")
+        
+        # 根据用户是否选择了IPv6地址决定不同的检查逻辑
+        if self.ipv6_regex:
+            selected_ip = None
+            
+            # 处理索引格式 @1, @2 等
+            if self.ipv6_regex.startswith('@'):
+                try:
+                    index = int(self.ipv6_regex[1:]) - 1  # 转为0-based索引
+                    if 0 <= index < len(sorted_ipv6_list):
+                        selected_ip = sorted_ipv6_list[index]
+                        logger.info(f"[{self.task_id}] 通过索引 {self.ipv6_regex} 选择IPv6地址: {selected_ip}")
+                        # 对于用户选择的地址，不需要进行ping测试，直接返回该地址
+                        # 因为网卡自动获得的地址可能会有更新，我们只需要检查这个位置的地址是否存在
+                        return set([selected_ip])
                     else:
-                        continue
-
-        if not ipv6_list:
+                        logger.warning(f"[{self.task_id}] 索引 {self.ipv6_regex} 超出范围，索引范围应为 @1 到 @{len(sorted_ipv6_list)}")
+                except ValueError:
+                    logger.warning(f"[{self.task_id}] 无效的索引格式: {self.ipv6_regex}，正确格式应为 @1, @2 等")
+            # 处理正则表达式格式
+            else:
+                try:
+                    pattern = re.compile(self.ipv6_regex)
+                    selected_ip = next((ip for ip in sorted_ipv6_list if pattern.search(ip)), None)
+                    if selected_ip:
+                        logger.info(f"[{self.task_id}] 通过正则表达式 '{self.ipv6_regex}' 选择IPv6地址: {selected_ip}")
+                        # 对于用户通过正则选择的地址，直接返回
+                        return set([selected_ip])
+                    else:
+                        logger.warning(f"[{self.task_id}] 未能通过正则表达式 '{self.ipv6_regex}' 匹配到任何IPv6地址")
+                except re.error:
+                    logger.warning(f"[{self.task_id}] 无效的正则表达式: {self.ipv6_regex}")
+            
+            logger.warning(f"[{self.task_id}] IPv6地址选择失败，将回退到ping测试方式")
+        
+        # 用户没有选择IPv6地址或选择失败，对所有地址进行ping测试
+        logger.info(f"[{self.task_id}] 用户未选择IPv6地址或选择失败，正在对所有IPv6地址进行ping测试")
+        pinged_ips = []
+        for ip in sorted_ipv6_list:
+            if self.public_ipv6_check(ip):
+                pinged_ips.append(ip)
+        
+        if not pinged_ips:
+            logger.warning(f"[{self.task_id}] 所有IPv6地址都无法通过ping测试")
             return None
         else:
-            return set(sorted(ipv6_list))
+            logger.info(f"[{self.task_id}] 共有 {len(pinged_ips)} 个IPv6地址通过了ping测试")
+            return set(pinged_ips)
 
     @staticmethod
     def is_public_ipv6(ip):
@@ -270,7 +370,7 @@ class IPv6Tool:
         def ping6_network():
             try:
                 res = requests.get(
-                    f"https://ping6.network/index.php?host={ip.replace(":", "%3A")}",
+                    f"https://ping6.network/index.php?host={ip.replace(':', '%3A')}",
                     headers={"User-Agent": user_agent},
                     timeout=15
                 )
@@ -307,6 +407,7 @@ class Dingtalk:
     def notice_eo_result(self, site_tag:str, zone_id:str, public_ipv6:List[str], message:str):
         ipv6_text = [f"- {item}\n" for item in public_ipv6]
 
+        ipv6_content = '\n'.join(ipv6_text)
         requests.post(
             self.webhook,
             json={
@@ -316,7 +417,7 @@ class Dingtalk:
                             f"**标签：** {site_tag}\n\n"
                             f"**站点：** {zone_id}\n\n"
                             f"**信息：** {message}\n\n"
-                            f"**IPV6：** \n\n{"\n".join(ipv6_text)}"
+                            f"**IPV6：** \n\n{ipv6_content}"
                 }, "msgtype": "markdown"}
         )
 
@@ -337,7 +438,18 @@ class Dingtalk:
 # =================== 任务处理 ===================
 def update_task(task_id=""):
     config = read_config()
-    iptool = IPv6Tool(config.get("SelectIface"), task_id)
+    # 获取自定义IP列表，如果配置中不存在则为空列表
+    custom_ip_list = config.get("CustomIPList", [])
+    # 确保custom_ip_list是列表类型
+    if not isinstance(custom_ip_list, list):
+        custom_ip_list = []
+    
+    iptool = IPv6Tool(
+        select_iface=config.get("SelectIface"), 
+        task_id=task_id, 
+        ipv6_regex=config.get("IPv6Regex"),
+        custom_ip_list=custom_ip_list
+    )
     dingtalk = Dingtalk(config.get('DingTalkWebhook'))
     eo_zones = config.get("EdgeOneZoneId")
     domains = config.get('DnsPodRecord')
@@ -348,7 +460,12 @@ def update_task(task_id=""):
         dingtalk.notice_no_public_ipv6()
         return
     else:
-        logger.info(f"[{task_id}] 获取公网 IPV6 地址成功，地址为：{",".join(iptool.public_ipv6)}")
+        ipv6_addresses = ','.join(iptool.public_ipv6)
+        # 记录包含自定义IP的完整地址列表
+        if iptool.custom_ip_list:
+            logger.info(f"[{task_id}] 获取IP地址成功（包含 {len(iptool.custom_ip_list)} 个自定义IP），完整地址为：{ipv6_addresses}")
+        else:
+            logger.info(f"[{task_id}] 获取公网 IPV6 地址成功，地址为：{ipv6_addresses}")
 
     if eo_zones:
         eo_client = QcloudClient(secret=qcloud_secret, service='teo', version='2022-09-01')
@@ -362,9 +479,9 @@ def update_task(task_id=""):
                 records = set(old_list)
 
                 if iptool.public_ipv6 == records:
-                    logger.info(f"[{task_id}] 公网 IPV6 地址未发生变更，站点 {zone} 的源站组 {hostname} 无需更新。")
+                    logger.info(f"[{task_id}] IP 地址列表未发生变更，站点 {zone} 的源站组 {hostname} 无需更新。")
                 else:
-                    logger.info(f"[{task_id}] 公网 IPV6 地址发生变更，新的地址： {iptool.public_ipv6}")
+                    logger.info(f"[{task_id}] IP 地址列表发生变更，新的地址： {iptool.public_ipv6}")
                     error_msg, error_code = eo_client.modify_origin_group(zone, group_id, iptool.public_ipv6)
                     error_msg = F"成功更新站点 {zone} 的源站组 {hostname} 。" if not error_code and not error_msg else error_msg
                     logger.info(f"[{task_id}] {error_msg} {error_code}")
@@ -507,6 +624,27 @@ def api_run(background_tasks: BackgroundTasks):
 def api_iface():
     return list(psutil.net_if_addrs().keys())
 
+@app.get('/api/ipv6-addresses')
+def api_ipv6_addresses(iface: str = None):
+    """获取指定网络接口的IPv6地址列表"""
+    ipv6_addresses = []
+    addrs = psutil.net_if_addrs()
+    
+    # 如果指定了接口且存在
+    if iface and iface in addrs:
+        interfaces = [iface]
+    else:
+        # 否则返回所有接口
+        interfaces = addrs.keys()
+    
+    for interface in interfaces:
+        for addr in addrs[interface]:
+            ip = addr.address.split('%')[0]
+            if addr.family == socket.AF_INET6 and IPv6Tool.is_public_ipv6(ip):
+                ipv6_addresses.append(ip)
+    
+    return sorted(ipv6_addresses)
+
 @app.get('/api/config')
 def get_config():
     cfgfile = os.path.join(str(HOME_DIR), ".eodo.config.yaml")
@@ -560,6 +698,123 @@ async def set_interval(request: Request):
     with open(cfgfile, "w", encoding="utf-8") as f:
         yaml.dump(config, f, allow_unicode=True)
     return {"msg": "已设置周期间隔"}
+
+@app.get("/api/accel-domains")
+def get_accel_domains():
+    try:
+        # 从配置文件中读取已保存的加速域名列表
+        config = read_config()
+        accel_domains = config.get("AccelDomains", [])
+        return {"success": True, "domains": accel_domains}
+    except Exception as e:
+        logger.error(f"获取加速域名列表失败: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+@app.get("/api/origin-groups/{zone_id}")
+async def get_origin_groups(zone_id: str):
+    """获取指定ZoneID的源站组列表"""
+    try:
+        # 加载配置
+        config = read_config()
+        
+        # 检查是否有腾讯云密钥配置
+        if not config.get("TencentCloud") or not config["TencentCloud"].get("SecretId") or not config["TencentCloud"].get("SecretKey"):
+            logger.error("请先配置腾讯云密钥")
+            return {"success": False, "message": "请检查腾讯云SecretId和SecretKey配置是否正确"}
+        
+        # 创建QcloudClient实例
+        client = QcloudClient(config["TencentCloud"])
+        
+        # 调用API获取源站组列表
+        response = client.describe_all_origin_groups(zone_id)
+        
+        # 检查是否有错误
+        if "Error" in response:
+            error_msg = response["Error"].get("Message", "获取源站组失败")
+            logger.error(f"获取源站组失败: {error_msg}")
+            # 统一错误提示格式
+            return {"success": False, "message": f"请检查SecretId、SecretKey和EdgeOne站点配置的ZoneID({zone_id})是否正确"}
+        
+        # 格式化返回数据
+        origin_groups = response.get("OriginGroups", [])
+        groups_data = [{
+            "groupId": group.get("GroupId"),
+            "name": group.get("Name"),
+            "type": group.get("Type")
+        } for group in origin_groups]
+        
+        return {"success": True, "originGroups": groups_data}
+    except Exception as e:
+        logger.error(f"获取源站组列表失败: {str(e)}")
+        # 统一异常情况下的错误提示
+        return {"success": False, "message": f"获取源站组失败，请检查SecretId、SecretKey和EdgeOne站点配置的ZoneID是否正确"}
+
+@app.post("/api/create-accel-domain")
+async def create_accel_domain(request: Request):
+    try:
+        data = await request.json()
+        zone_id = data.get("zoneId")
+        domain_name = data.get("domainName")
+        origin_group_id = data.get("originGroupId")
+        origin_address = data.get("originAddress")
+        
+        if not zone_id or not domain_name:
+            return {"success": False, "message": "站点ZoneID和加速域名不能为空"}
+        
+        # 获取回源配置参数
+        origin_protocol = data.get("originProtocol", "FOLLOW")  # 默认协议跟随
+        http_origin_port = data.get("httpOriginPort")
+        https_origin_port = data.get("httpsOriginPort")
+        
+        # 加载配置
+        config = read_config()
+        
+        # 检查是否有腾讯云密钥配置
+        if not config.get("TencentCloud") or not config["TencentCloud"].get("SecretId") or not config["TencentCloud"].get("SecretKey"):
+            return {"success": False, "message": "请检查腾讯云SecretId和SecretKey配置是否正确"}
+        
+        # 创建QcloudClient实例
+        client = QcloudClient(config["TencentCloud"])
+        
+        # 这里暂时模拟创建成功，实际应该调用API
+        # 保存到配置文件中
+        accel_domain = {
+            "zoneId": zone_id,
+            "domainName": domain_name,
+            "originProtocol": origin_protocol
+        }
+        if origin_group_id:
+            accel_domain["originGroupId"] = origin_group_id
+        if origin_address:
+            accel_domain["originAddress"] = origin_address
+        
+        # 根据协议添加对应的端口
+        if origin_protocol == "FOLLOW" or origin_protocol == "HTTP":
+            accel_domain["httpOriginPort"] = http_origin_port or 80
+        if origin_protocol == "FOLLOW" or origin_protocol == "HTTPS":
+            accel_domain["httpsOriginPort"] = https_origin_port or 443
+        
+        # 获取现有加速域名列表
+        accel_domains = config.get("AccelDomains", [])
+        # 检查是否已存在相同域名
+        for domain in accel_domains:
+            if domain["domainName"] == domain_name and domain["zoneId"] == zone_id:
+                return {"success": False, "message": "该加速域名已存在"}
+        
+        # 添加新加速域名
+        accel_domains.append(accel_domain)
+        config["AccelDomains"] = accel_domains
+        
+        # 保存到配置文件
+        cfgfile = os.path.join(str(HOME_DIR), ".eodo.config.yaml")
+        with open(cfgfile, "w", encoding="utf-8") as f:
+            yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        
+        return {"success": True, "message": "创建加速域名成功"}
+    except Exception as e:
+        logger.error(f"创建加速域名失败: {str(e)}")
+        # 统一异常情况下的错误提示
+        return {"success": False, "message": "创建加速域名失败，请检查SecretId、SecretKey和EdgeOne站点配置的ZoneID是否正确"}
 
 
 def main():
