@@ -292,10 +292,20 @@ function fetchStatus(){
     let dom = document.getElementById('status');
     dom.innerHTML = '<span class="text-muted">更新中...</span>';
     fetch('/api/status').then(r=>r.json()).then(res=>{
+        let badgeClass = 'bg-secondary';
+        if (res.result === '异常') {
+            badgeClass = 'bg-danger';
+        } else if (res.result === '结束') {
+            badgeClass = 'bg-success';
+        } else if (res.result === '跳过') {
+            badgeClass = 'bg-info';
+        } else if (res.result === '启动') {
+            badgeClass = 'bg-warning';
+        }
         dom.innerHTML = `
             <b>任务ID:</b> ${res.id||'未知'}<br>
             <b>任务时间:</b> ${res.time||''}<br>
-            <b>状态:</b> <span class="badge ${res.result==='异常'?'bg-red':(res.result==='结束'?'bg-green':'bg-blue')}">
+            <b>状态:</b> <span class="badge ${badgeClass}">
             ${res.result||'未知'}</span>
         `;
     }).catch(()=>{ dom.innerHTML = '<span class="text-danger">获取失败</span>'; });
