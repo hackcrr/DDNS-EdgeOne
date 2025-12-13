@@ -27,7 +27,20 @@ import uvicorn
 
 # =================== 常量与路径 ===================
 HOME_DIR = Path.home()
-TEMP_DIR = tempfile.gettempdir()
+# 使用/app/config作为持久化存储目录（Docker挂载路径）
+TEMP_DIR = "/app/config"
+# 确保配置目录存在
+config_dir = Path(TEMP_DIR)
+try:
+    config_dir.mkdir(exist_ok=True, parents=True)
+    print(f"配置目录已确保存在: {TEMP_DIR}")
+except PermissionError:
+    # 如果在Docker外部运行时没有权限创建/app/config，则回退到临时目录
+    print(f"警告: 无法创建目录 {TEMP_DIR}，回退到临时目录")
+    TEMP_DIR = tempfile.gettempdir()
+    config_dir = Path(TEMP_DIR)
+    config_dir.mkdir(exist_ok=True, parents=True)
+    print(f"使用临时目录: {TEMP_DIR}")
 CURRENT_DIR = Path(__file__).parent
 STATIC_PATH = CURRENT_DIR / "static"
 STATIC_PATH.mkdir(exist_ok=True)
@@ -37,20 +50,46 @@ print(TEMP_DIR)
 
 # =================== 日志与配置 ===================
 def setup_logging(file="task"):
-    """日志初始化"""
+    """日志初始化 - 支持持久化存储到/app/config目录"""
     _logger = logging.getLogger(f"task.{file}")
     _logger.setLevel(logging.INFO)
 
-    log_file = f"{TEMP_DIR}/eodo.{file}.log.txt"
-    file_handler = RotatingFileHandler(log_file, maxBytes=200 * 1024, backupCount=1, encoding="utf-8")
+    # 使用Path对象构建日志文件路径，更健壮的路径处理
+    log_file_path = Path(TEMP_DIR) / f"eodo.{file}.log.txt"
+    log_file = str(log_file_path)
+    
+    try:
+        # 尝试创建RotatingFileHandler
+        file_handler = RotatingFileHandler(
+            log_file, 
+            maxBytes=200 * 1024,  # 200KB
+            backupCount=5,        # 增加备份数量到5个
+            encoding="utf-8"
+        )
+        # 配置文件处理器
+        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.INFO)
+        print(f"日志文件已配置: {log_file}")
+    except Exception as e:
+        # 如果文件处理器创建失败，仅使用控制台日志
+        print(f"警告: 无法创建日志文件 {log_file}: {str(e)}")
+        file_handler = None
+    
+    # 配置控制台处理器
     console_handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
-
-    for handler in [file_handler, console_handler]:
-        handler.setFormatter(formatter)
-        handler.setLevel(logging.INFO)
-        if not _logger.hasHandlers():
-            _logger.addHandler(handler)
+    console_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+    console_handler.setFormatter(console_formatter)
+    console_handler.setLevel(logging.INFO)
+    
+    # 清除现有处理器并添加新处理器
+    if _logger.hasHandlers():
+        _logger.handlers.clear()
+    
+    if file_handler:
+        _logger.addHandler(file_handler)
+    _logger.addHandler(console_handler)
+    
     return _logger
 
 logger = setup_logging("task")
@@ -207,35 +246,90 @@ class QcloudClient:
         body = {"Domain": top_domain, "RecordId": record_id}
         requests.post(f'https://{self.host}', headers=self.signature("DeleteRecord", body), json=body)
 
-    def create_acceleration_domain(self, zone_id, domain_name, origin_group_id=None, origin_address=None):
+    def create_acceleration_domain(self, zone_id, domain_name, origin_type="IP_DOMAIN", origin_group_id=None, origin_address=None, ipv6_status="follow", origin_protocol="FOLLOW", http_origin_port=80, https_origin_port=443):
         """创建加速域名
         参考文档: https://cloud.tencent.com/document/api/1552/86338
         """
-        body = {
-            "ZoneId": zone_id,
-            "Domain": domain_name,
-            "Type": "site"
-        }
-        # 源站配置，支持源站组ID或直接指定源站地址
-        if origin_group_id:
-            body["OriginInfo"] = {
-                "OriginGroupId": origin_group_id
+        try:
+            # 参数验证
+            if not zone_id or not domain_name:
+                return "ZoneId和DomainName不能为空", "MissingParameters"
+            
+            if origin_type == "ORIGIN_GROUP" and not origin_group_id:
+                return "源站组ID不能为空", "MissingOriginGroupId"
+            if origin_type == "IP_DOMAIN" and not origin_address:
+                return "源站地址不能为空", "MissingOriginAddress"
+            
+            # 构建请求体
+            body = {
+                "ZoneId": str(zone_id).strip(),
+                "DomainName": str(domain_name).strip(),
+                "IPv6Status": ipv6_status,
+                "OriginProtocol": origin_protocol
             }
-        elif origin_address:
+            
+            # 设置端口
+            if origin_protocol in ["FOLLOW", "HTTP"]:
+                body["HttpOriginPort"] = http_origin_port    
+            if origin_protocol in ["FOLLOW", "HTTPS"]:
+                body["HttpsOriginPort"] = https_origin_port
+            
+            # 设置源站信息
+            origin_value = origin_group_id if origin_type == "ORIGIN_GROUP" else origin_address
             body["OriginInfo"] = {
-                "Origin": [{
-                    "Record": origin_address,
-                    "Type": "IP_DOMAIN"
-                }]
+                "OriginType": origin_type,
+                "Origin": str(origin_value).strip()
             }
-        
-        response = requests.post(
-            f'https://{self.host}', 
-            headers=self.signature("CreateAccelerationDomain", body), 
-            json=body
-        ).json()
-        error = response.get("Response", {}).get("Error", {})
-        return error.get("Message", ""), error.get("Code", "")
+            
+            # 发送请求
+            response = requests.post(
+                f'https://{self.host}', 
+                headers=self.signature("CreateAccelerationDomain", body), 
+                json=body
+            )
+            
+            # 处理HTTP响应
+            if response.status_code != 200:
+                error_msg = f"HTTP请求失败，状态码: {response.status_code}, 响应内容: {response.text}"
+                print(f"创建加速域名失败: {error_msg}")
+                return error_msg, f"HTTP_{response.status_code}"
+            
+            # 解析响应
+            response_json = response.json()
+            print(f"创建加速域名接口响应: {response_json}")
+            
+            # 检查是否有错误
+            if "Response" in response_json:
+                error = response_json["Response"].get("Error", {})
+                if error:
+                    error_msg = error.get("Message", "未知错误")
+                    error_code = error.get("Code", "UnknownError")
+                    print(f"创建加速域名失败: {error_msg} (错误码: {error_code})")
+                    return error_msg, error_code
+                # 腾讯云API响应可能不包含AccelerationDomain字段，但只要没有错误且有RequestId，就应该认为成功
+                elif "RequestId" in response_json["Response"]:
+                    # 成功创建
+                    request_id = response_json["Response"]["RequestId"]
+                    print(f"加速域名创建成功: {domain_name}, RequestId: {request_id}")
+                    return "", ""
+                else:
+                    # 响应格式异常
+                    error_msg = f"响应格式异常，缺少RequestId字段: {response_json}"
+                    print(f"创建加速域名失败: {error_msg}")
+                    return error_msg, "InvalidResponse"
+            else:
+                # 响应格式异常
+                error_msg = f"响应格式异常，缺少Response字段: {response_json}"
+                print(f"创建加速域名失败: {error_msg}")
+                return error_msg, "InvalidResponse"
+                
+        except Exception as e:
+            # 捕获所有异常
+            error_msg = f"创建加速域名时发生异常: {str(e)}"
+            print(f"{error_msg}", exc_info=True)  # 记录完整堆栈
+            return error_msg, "Exception"
+        finally:
+            print(f"创建加速域名操作完成")
 
     def describe_dns_record(self, top_domain, sub_domain, record_type):
 
@@ -812,73 +906,93 @@ async def get_origin_groups(zone_id: str):
         # 统一异常情况下的错误提示
         return {"success": False, "message": f"获取源站组失败，请检查SecretId、SecretKey和EdgeOne站点配置的ZoneID是否正确"}
 
+
+def _save_accel_domain_to_config(zone_id, domain_name, data):
+    """将加速域名保存到配置文件"""
+    config = read_config()
+    
+    # 构建加速域名配置
+    accel_domain = {
+        "zoneId": zone_id,
+        "domainName": domain_name,
+        "originProtocol": data.get("originProtocol", "FOLLOW"),
+        "originType": data.get("originType", "ip")
+    }
+    
+    # 根据类型添加对应的源站信息
+    if data.get("originType") == "group":
+        accel_domain["originGroupId"] = data.get("originGroupId")
+    else:
+        accel_domain["originAddress"] = data.get("originAddress")
+    
+    # 获取现有列表并检查重复
+    accel_domains = config.get("AccelDomains", [])
+    for domain in accel_domains:
+        if domain["domainName"] == domain_name and domain["zoneId"] == zone_id:
+            raise ValueError("该加速域名已存在")
+    
+    # 添加新记录
+    accel_domains.append(accel_domain)
+    config["AccelDomains"] = accel_domains
+    
+    # 保存配置
+    cfgfile = os.path.join(str(HOME_DIR), ".eodo.config.yaml")
+    with open(cfgfile, "w", encoding="utf-8") as f:
+        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+
 @app.post("/api/create-accel-domain")
 async def create_accel_domain(request: Request):
     try:
         data = await request.json()
         zone_id = data.get("zoneId")
         domain_name = data.get("domainName")
+        origin_type_param = data.get("originType", "ip")  # "group" 或 "ip"
         origin_group_id = data.get("originGroupId")
         origin_address = data.get("originAddress")
-        
+        # 基本验证
         if not zone_id or not domain_name:
             return {"success": False, "message": "站点ZoneID和加速域名不能为空"}
         
-        # 获取回源配置参数
-        origin_protocol = data.get("originProtocol", "FOLLOW")  # 默认协议跟随
-        http_origin_port = data.get("httpOriginPort")
-        https_origin_port = data.get("httpsOriginPort")
+        # 源站验证
+        if origin_type_param == "group" and not origin_group_id:
+            return {"success": False, "message": "源站组ID不能为空"}
+        if origin_type_param == "ip" and not origin_address:
+            return {"success": False, "message": "源站地址不能为空"}
         
         # 加载配置
         config = read_config()
+        qcloud_secret = config.get('TencentCloud')
+        if not qcloud_secret or not qcloud_secret.get("SecretId") or not qcloud_secret.get("SecretKey"):
+            return {"success": False, "message": "未配置腾讯云密钥"}
+        # 创建客户端并调用
+        client = QcloudClient(qcloud_secret)
         
-        # 检查是否有腾讯云密钥配置
-        if not config.get("TencentCloud") or not config["TencentCloud"].get("SecretId") or not config["TencentCloud"].get("SecretKey"):
-            return {"success": False, "message": "请检查腾讯云SecretId和SecretKey配置是否正确"}
+        # 转换origin_type参数
+        origin_type = "ORIGIN_GROUP" if origin_type_param == "group" else "IP_DOMAIN"
         
-        # 创建QcloudClient实例
-        client = QcloudClient(config["TencentCloud"])
+        # 调用客户端方法
+        error_msg, error_code = client.create_acceleration_domain(
+            zone_id=zone_id,
+            domain_name=domain_name,
+            origin_type=origin_type,
+            origin_group_id=origin_group_id,
+            origin_address=origin_address,
+            ipv6_status=data.get("ipv6Status", "follow"),
+            origin_protocol=data.get("originProtocol", "FOLLOW"),
+            http_origin_port=data.get("httpOriginPort", 80),
+            https_origin_port=data.get("httpsOriginPort", 443)
+        )
+        if error_msg:
+            return {"success": False, "message": f"创建加速域名失败: {error_msg}"}
         
-        # 这里暂时模拟创建成功，实际应该调用API
         # 保存到配置文件中
-        accel_domain = {
-            "zoneId": zone_id,
-            "domainName": domain_name,
-            "originProtocol": origin_protocol
-        }
-        if origin_group_id:
-            accel_domain["originGroupId"] = origin_group_id
-        if origin_address:
-            accel_domain["originAddress"] = origin_address
-        
-        # 根据协议添加对应的端口
-        if origin_protocol == "FOLLOW" or origin_protocol == "HTTP":
-            accel_domain["httpOriginPort"] = http_origin_port or 80
-        if origin_protocol == "FOLLOW" or origin_protocol == "HTTPS":
-            accel_domain["httpsOriginPort"] = https_origin_port or 443
-        
-        # 获取现有加速域名列表
-        accel_domains = config.get("AccelDomains", [])
-        # 检查是否已存在相同域名
-        for domain in accel_domains:
-            if domain["domainName"] == domain_name and domain["zoneId"] == zone_id:
-                return {"success": False, "message": "该加速域名已存在"}
-        
-        # 添加新加速域名
-        accel_domains.append(accel_domain)
-        config["AccelDomains"] = accel_domains
-        
-        # 保存到配置文件
-        cfgfile = os.path.join(str(HOME_DIR), ".eodo.config.yaml")
-        with open(cfgfile, "w", encoding="utf-8") as f:
-            yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        _save_accel_domain_to_config(zone_id, domain_name, data)
         
         return {"success": True, "message": "创建加速域名成功"}
+        
     except Exception as e:
         logger.error(f"创建加速域名失败: {str(e)}")
-        # 统一异常情况下的错误提示
-        return {"success": False, "message": "创建加速域名失败，请检查SecretId、SecretKey和EdgeOne站点配置的ZoneID是否正确"}
-
+        return {"success": False, "message": "创建加速域名失败，请检查配置信息"}
 
 def main():
     parser = argparse.ArgumentParser()

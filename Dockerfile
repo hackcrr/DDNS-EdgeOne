@@ -37,7 +37,13 @@ COPY src ./src
 COPY README.md ./
 COPY img.png ./
 
-# 设置环境变量（可选）
+# 创建配置目录
+RUN mkdir -p /app/config
+
+# 设置配置目录为挂载点
+VOLUME ["/app/config"]
+
+# 设置环境变量
 ENV PYTHONUNBUFFERED=1
 
 # 暴露端口
