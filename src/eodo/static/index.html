@@ -302,10 +302,20 @@ function fetchStatus(){
     let dom = document.getElementById('status');
     dom.innerHTML = '<span class="text-muted">更新中...</span>';
     fetch('/api/status').then(r=>r.json()).then(res=>{
+        let badgeClass = 'bg-secondary';
+        if (res.result === '异常') {
+            badgeClass = 'bg-danger';
+        } else if (res.result === '结束') {
+            badgeClass = 'bg-success';
+        } else if (res.result === '跳过') {
+            badgeClass = 'bg-info';
+        } else if (res.result === '启动') {
+            badgeClass = 'bg-warning';
+        }
         dom.innerHTML = `
             <b>任务ID:</b> ${res.id||'未知'}<br>
             <b>任务时间:</b> ${res.time||''}<br>
-            <b>状态:</b> <span class="badge ${res.result==='异常'?'bg-red':(res.result==='结束'?'bg-green':'bg-blue')}">
+            <b>状态:</b> <span class="badge ${badgeClass}">
             ${res.result||'未知'}</span>
         `;
     }).catch(()=>{ dom.innerHTML = '<span class="text-danger">获取失败</span>'; });
@@ -714,12 +724,17 @@ function setupAccelDomainForm() {
         const originType = document.querySelector('input[name="originType"]:checked').value;
         let data = {
             zoneId: zoneId,
-            domainName: domainName
+            domainName: domainName,
+            originType: originType
         };
         
         if (originType === 'group') {
-            const groupId = this.originGroupId.value;
+            const originGroupSelect = document.getElementById('originGroupId');
+            const selectedOption = originGroupSelect.options[originGroupSelect.selectedIndex];
+            const groupId = selectedOption ? selectedOption.value.trim() : '';
+            
             if (groupId) {
+                console.log('选择的源站组ID:', groupId, typeof groupId);
                 data.originGroupId = groupId;
             }
         } else {
@@ -750,7 +765,10 @@ function setupAccelDomainForm() {
         
         const submitBtn = this.querySelector('button[type="submit"]');
         submitBtn.disabled = true;
-        submitBtn.textContent = '创建中...';
+        submitBtn.textContent = '处理中...';
+        
+        // 显示加速域名创建提示
+        showToast('正在创建加速域名，请稍候...', 3000);
         
         // 调用后端API创建加速域名
         fetch('/api/create-accel-domain', {
@@ -758,20 +776,41 @@ function setupAccelDomainForm() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP错误! 状态码: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(result => {
             if (result.success) {
-                showToast('创建成功', 2000);
+                // 先显示加速域名创建成功
+                showToast('加速域名创建成功', 2000);
+                
+                // 检查是否有DNS记录创建警告
+                if (result.warning) {
+                    // 显示警告信息
+                    setTimeout(() => {
+                        showToast(result.message || 'DNS记录创建失败，请手动配置', 5000, 'warning');
+                    }, 2000);
+                } else {
+                    // 正常情况下，显示DNS记录创建进度
+                    setTimeout(() => {
+                        showToast('正在创建DNS记录，请稍候...', 3000);
+                    }, 2000);
+                }
+                
                 // 重置表单
                 this.reset();
                 // 刷新加速域名列表
                 fetchAccelDomains();
             } else {
+                // 显示错误信息
                 showToast(`创建失败: ${result.message || '未知错误'}`, 3000);
             }
         })
         .catch(error => {
-            showToast('请求失败，请稍后重试', 2000);
+            showToast(`请求失败: ${error.message || '请稍后重试'}`, 3000);
         })
         .finally(() => {
             submitBtn.disabled = false;
@@ -779,7 +818,6 @@ function setupAccelDomainForm() {
         });
     };
 }
-
 // ---- 加速域名列表管理
 function addAccelDomainRow(zoneId, domainName, originConfig) {
   let tb = document.getElementById("AccelDomainsTable").getElementsByTagName("tbody")[0];
